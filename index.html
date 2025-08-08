@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Listplicity Chatbot Demo</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main>
+    <h1 style="text-align:center;margin-top:24px;">Listplicity Conversational Funnel</h1>
+    <p style="text-align:center;">Front-and-center on desktop, full-screen on mobile.</p>
+  </main>
+
+  <!-- Chat overlay + panel + launcher -->
+  <div id="lp-chat-overlay" class="lp-overlay lp-hidden">
+    <div class="lp-chat-panel" role="dialog" aria-label="Listplicity Chat">
+      <div class="lp-header">
+        <div class="lp-title">Listplicity Assistant</div>
+        <button class="lp-close" id="lpCloseBtn" aria-label="Close chat">&times;</button>
+      </div>
+      <div class="lp-progress"><div class="lp-progress-bar" id="lpProgress"></div></div>
+      <div class="lp-chatlog" id="lpChatlog" aria-live="polite"></div>
+      <form id="lpForm" class="lp-form" autocomplete="off">
+        <input id="lpInput" class="lp-input" type="text" placeholder="Type here..." />
+        <button class="lp-send" type="submit">Send</button>
+      </form>
+    </div>
+  </div>
+  <button id="lpLauncher" class="lp-launcher">Chat with us</button>
+
+  <script src="./chat-widget.js"></script>
+</body>
+</html>
