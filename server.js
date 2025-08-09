@@ -1,17 +1,16 @@
-// server.js — Listplicity Chatbot (Warm Welcome Version)
+// server.js — Listplicity Chatbot (Chat Completions, Warm Welcome, Static Hosting)
 
 import 'dotenv/config';
 import express from 'express';
-import fetch from 'node-fetch';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const app = express();
 app.use(express.json());
 
-// ---------- CORS ----------
+// ---------- CORS (you can lock this to your domain later) ----------
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*'); // Restrict to domain later
+  res.header('Access-Control-Allow-Origin', '*'); // e.g. 'https://listplicity.com'
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
@@ -20,10 +19,14 @@ app.use((req, res, next) => {
 
 // ---------- Healthcheck ----------
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'listplicity-chatbot', llm: process.env.LLM_ENABLED === 'true' });
+  res.json({
+    ok: true,
+    service: 'listplicity-chatbot',
+    llm: process.env.LLM_ENABLED === 'true',
+  });
 });
 
-// ---------- Lead forwarder ----------
+// ---------- Lead forwarder to GHL ----------
 app.post('/api/lead', async (req, res) => {
   const webhook = process.env.GHL_WEBHOOK_URL;
   if (!webhook) return res.status(500).json({ ok: false, error: 'Missing GHL_WEBHOOK_URL' });
@@ -49,20 +52,20 @@ app.post('/api/lead', async (req, res) => {
   }
 });
 
-// ---------- Welcome message endpoint ----------
+// ---------- Warm Welcome (instant message for UI on first load) ----------
 app.get('/api/welcome', (_req, res) => {
   res.json({
     intent: 'welcome',
-    bot_text: `Hi there, and welcome to Listplicity! 👋  
-Thanks so much for stopping by. Whether you're buying, selling, or just exploring your options, I'm here to help.  
-Feel free to ask me anything about real estate — from our exclusive 1% Listing Service to finding your dream home on the MLS.  
+    bot_text: `Hi there, and welcome to Listplicity! 👋
+Thanks so much for stopping by. Whether you're buying, selling, or just exploring your options, I'm here to help.
+Ask me anything about real estate — from our 1% Listing (Limited Services) to finding your dream home on the MLS.
 So… what brings you here today?`,
     state_patch: {},
     action: null,
   });
 });
 
-// ---------- Smart chat ----------
+// ---------- Smart chat (LLM) — Chat Completions JSON mode ----------
 app.post('/api/chat', async (req, res) => {
   if (process.env.LLM_ENABLED !== 'true') {
     return res.json({
@@ -77,96 +80,103 @@ app.post('/api/chat', async (req, res) => {
 
   const systemPrompt = `
 You are the Listplicity Real Estate Assistant.
-Tone: confident, warm, professional, but conversational.
+Tone: confident, warm, professional, conversational.
 
 Primary goals:
 1) Hold a friendly conversation about buying, selling, or both.
-2) Always work toward gathering these lead fields: 
-   path(sell|buy|both), state, address, sell_timeline, buy_area, buy_budget, 
-   buy_preapproval(yes|no|unsure), name, email, phone.
-3) Once all required fields are collected, set action="submit" and confirm briefly.
+2) Always work toward gathering fields: path(sell|buy|both), state, address, sell_timeline,
+   buy_area, buy_budget, buy_preapproval(yes|no|unsure), name, email, phone.
+3) When required fields are present, set action="submit" and confirm briefly.
 
-Special instructions for 1% Listing (Limited Services):
-- If user asks about 1% listing, explain it's a Limited Services Listing and not for everyone.
-- Do NOT give full details in chat. Encourage booking a quick call or provide phone for a quick review.
+1% Listing (Limited Services):
+- If asked, explain it's a Limited Services Listing and not for everyone.
+- Do NOT give full details in chat. Encourage a quick call or phone # to review their situation.
 - Example: "It can save you money, but it depends on your situation. A 10-minute call is best—what’s the best number and a good time?"
 
 Buyer flow (collect-first, then link):
-- If user is buying or asks for MLS access, acknowledge we have a free MLS-connected app (iOS & Android) but do not paste the link immediately.
-- First ask two qualifiers: preferred areas/school zones and price range.
-- Then collect contact:
-  - Ask for name.
-  - Ask for email.
-  - Ask for phone with this value hook: "I’ll text you the app link and set up instant alerts."
-- Once phone is provided, you may include the link (https://tinyurl.com/3cjtjupn) and say you’ll text it; set tag "MLS Link Request".
-- Continue collecting missing fields (timeline, preapproval). Keep replies short; always finish with the next needed question.
-- If the user insists on the link before sharing info, share it but still ask for at least one contact method and a next step.
+- If buying or asking for MLS: acknowledge an MLS-connected app exists (iOS & Android) but do not paste the link immediately.
+- Ask two qualifiers first: preferred areas/school zones and price range.
+- Then collect: name, email, phone ("I’ll text you the app link and set up instant alerts.").
+- After phone, you may include the link (https://tinyurl.com/3cjtjupn) and set tag "MLS Link Request".
+- Continue collecting timeline + preapproval. If they insist on the link first, share it but still ask for at least one contact method.
 
-Handling questions:
-- Real estate questions (laws, timelines, processes, market): answer accurately for their state, then pivot back to next missing field.
+Handling:
+- Answer state-specific RE questions briefly, then pivot to the next missing field.
 - Off-topic: acknowledge briefly and return to real estate.
 - Urgent/safety/legal: suggest human handoff; ask best phone/email.
 - Validate email/phone; if invalid, politely re-ask.
 
-Output strict JSON:
-{
-  "intent": "collect_info|relevant_question|off_topic|handoff",
+Return strict JSON only:
+{ "intent": "collect_info|relevant_question|off_topic|handoff",
   "bot_text": "string",
-  "state_patch": { /* optional: { path, answers:{...}, tag:"..." } */ },
-  "action": null | "submit"
-}
-`.trim();
+  "state_patch": { /* eg { path, answers:{...}, tag } */ },
+  "action": null | "submit" }`.trim();
 
-  const getModelText = (data) => {
-    if (data?.output_text) return data.output_text;
-    const c = data?.output?.[0]?.content?.[0]?.text;
-    if (typeof c === 'string') return c;
-    return '';
-  };
+  const msgs = [
+    { role: 'system', content: systemPrompt },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        history: Array.isArray(history) ? history.slice(-12) : [],
+        state
+      })
+    }
+  ];
 
   try {
-    const r = await fetch('https://api.openai.com/v1/responses', {
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        response_format: { type: 'json_object' },
-        input: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: JSON.stringify({ history, state }) },
-        ],
-      }),
+        response_format: { type: 'json_object' }, // JSON mode for structured output
+        messages: msgs,
+        temperature: 0.3
+      })
     });
 
+    if (!r.ok) {
+      const txt = await r.text().catch(()=> '');
+      console.error('OpenAI error:', r.status, txt);
+      return res.status(500).json({
+        intent: 'collect_info',
+        bot_text: 'I had trouble reaching my brain—mind trying again?',
+        state_patch: {},
+        action: null
+      });
+    }
+
     const data = await r.json();
-    const text = getModelText(data) || '{}';
+    const text = data?.choices?.[0]?.message?.content || '{}';
+
     let out;
     try { out = JSON.parse(text); }
-    catch { out = { intent: 'collect_info', bot_text: 'Sorry, I had a hiccup.', state_patch: {}, action: null }; }
-
-    if (!out || typeof out !== 'object') {
-      out = { intent: 'collect_info', bot_text: 'Sorry, I had a hiccup.', state_patch: {}, action: null };
+    catch {
+      out = { intent: 'collect_info', bot_text: 'Sorry, hiccup. Could you rephrase that?', state_patch: {}, action: null };
     }
-    res.json(out);
+    if (!out || typeof out !== 'object') {
+      out = { intent: 'collect_info', bot_text: 'Sorry, hiccup. Could you rephrase that?', state_patch: {}, action: null };
+    }
+    return res.json(out);
   } catch (e) {
-    console.error('LLM error:', e);
-    res.status(500).json({
+    console.error('LLM exception:', e);
+    return res.status(500).json({
       intent: 'collect_info',
       bot_text: 'I hit a snag. Mind trying again?',
       state_patch: {},
-      action: null,
+      action: null
     });
   }
 });
 
-// ---------- Static hosting ----------
+// ---------- Static hosting (so / shows your chat page) ----------
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
-app.use(express.static(__dirname));
+app.use(express.static(__dirname)); // serves index.html, css, js placed at repo root
 app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
