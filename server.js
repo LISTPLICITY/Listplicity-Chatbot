@@ -1,32 +1,32 @@
-// server.js — Listplicity Chatbot (full file)
+// server.js — Listplicity Chatbot (Warm Welcome Version)
 
-// --- Imports & setup ---
 import 'dotenv/config';
 import express from 'express';
 import fetch from 'node-fetch';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 const app = express();
 app.use(express.json());
 
-// --- CORS: allow your GHL page to call this API ---
+// ---------- CORS ----------
 app.use((req, res, next) => {
-  // You can lock this to your GHL domain if you want
-  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Origin', '*'); // Restrict to domain later
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
-// --- Healthcheck ---
+// ---------- Healthcheck ----------
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'listplicity-chatbot', llm: !!(process.env.LLM_ENABLED === 'true') });
+  res.json({ ok: true, service: 'listplicity-chatbot', llm: process.env.LLM_ENABLED === 'true' });
 });
 
-// --- Lead forwarder to GHL (keep your existing webhook as-is) ---
+// ---------- Lead forwarder ----------
 app.post('/api/lead', async (req, res) => {
   const webhook = process.env.GHL_WEBHOOK_URL;
-  if (!webhook) return res.status(500).json({ ok: false, error: 'Webhook not configured (GHL_WEBHOOK_URL)' });
+  if (!webhook) return res.status(500).json({ ok: false, error: 'Missing GHL_WEBHOOK_URL' });
 
   try {
     const payload = {
@@ -49,7 +49,20 @@ app.post('/api/lead', async (req, res) => {
   }
 });
 
-// --- Smart chat endpoint (LLM-powered) ---
+// ---------- Welcome message endpoint ----------
+app.get('/api/welcome', (_req, res) => {
+  res.json({
+    intent: 'welcome',
+    bot_text: `Hi there, and welcome to Listplicity! 👋  
+Thanks so much for stopping by. Whether you're buying, selling, or just exploring your options, I'm here to help.  
+Feel free to ask me anything about real estate — from our exclusive 1% Listing Service to finding your dream home on the MLS.  
+So… what brings you here today?`,
+    state_patch: {},
+    action: null,
+  });
+});
+
+// ---------- Smart chat ----------
 app.post('/api/chat', async (req, res) => {
   if (process.env.LLM_ENABLED !== 'true') {
     return res.json({
@@ -104,14 +117,10 @@ Output strict JSON:
 }
 `.trim();
 
-  // Helper: extract text from OpenAI Responses API (covers a few shapes)
   const getModelText = (data) => {
-    // Newer Responses API sometimes provides output_text
     if (data?.output_text) return data.output_text;
-    // Or content array
-    const maybe = data?.output?.[0]?.content?.[0]?.text;
-    if (typeof maybe === 'string') return maybe;
-    // Or top-level choices/message (fallback)
+    const c = data?.output?.[0]?.content?.[0]?.text;
+    if (typeof c === 'string') return c;
     return '';
   };
 
@@ -135,12 +144,9 @@ Output strict JSON:
     const data = await r.json();
     const text = getModelText(data) || '{}';
     let out;
-    try {
-      out = JSON.parse(text);
-    } catch {
-      out = { intent: 'collect_info', bot_text: 'Sorry, I had a hiccup.', state_patch: {}, action: null };
-    }
-    // Ensure minimal shape
+    try { out = JSON.parse(text); }
+    catch { out = { intent: 'collect_info', bot_text: 'Sorry, I had a hiccup.', state_patch: {}, action: null }; }
+
     if (!out || typeof out !== 'object') {
       out = { intent: 'collect_info', bot_text: 'Sorry, I had a hiccup.', state_patch: {}, action: null };
     }
@@ -156,19 +162,15 @@ Output strict JSON:
   }
 });
 
-// --- (Optional) serve static demo if you uploaded index.html etc. ---
-/*
-import path from 'path';
-import { fileURLToPath } from 'url';
+// ---------- Static hosting ----------
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname  = path.dirname(__filename);
 
 app.use(express.static(__dirname));
 app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
-*/
 
-// --- Start server ---
+// ---------- Start ----------
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Listplicity server running on :${port}`));
