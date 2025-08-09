@@ -1,34 +1,198 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Listplicity Chatbot Demo</title>
-  <link rel="stylesheet" href="./styles.css" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Listplicity Assistant</title>
+  <style>
+    :root{
+      --panel:#ffffff; --panel2:#f7f9fc; --bg:#f5f7fb;
+      --text:#0f172a; --muted:#64748b; --line:#e6eaf3;
+      --primary:#0b5fff; --primary2:#4d8dff; --accent:#22c55e;
+      --shadow:0 20px 50px rgba(2,6,23,.08); --r:18px;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+    main{max-width:920px;margin:32px auto;padding:0 16px}
+    h1{margin:0 0 6px;font-size:24px}
+    p.sub{margin:0 0 18px;color:var(--muted)}
+
+    /* Card / Chat */
+    .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+    .head{display:flex;gap:12px;align-items:center;padding:14px 16px;background:#fff;border-bottom:1px solid var(--line)}
+    .avatar{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--primary),var(--primary2));display:grid;place-items:center;color:#fff;font-weight:800}
+    .title{font-weight:800}
+    .subtle{font-size:12px;color:var(--muted)}
+    .bar{height:6px;background:#eef2f8}
+    .bar>div{height:100%;width:0;background:linear-gradient(90deg,var(--primary),var(--primary2));transition:width .25s}
+    .body{height:70vh;max-height:760px;min-height:520px;overflow:auto;padding:16px;background:linear-gradient(180deg,#fff,#fbfdff);display:flex;flex-direction:column;gap:12px}
+    .row{display:flex;gap:10px;align-items:flex-end}
+    .row.me{justify-content:flex-end}
+    .bubble{max-width:78%;padding:12px 14px;border-radius:14px;border:1px solid var(--line);background:#f7f9fd;font-size:15px;line-height:1.35;white-space:pre-wrap}
+    .row.me .bubble{background:#e9f0ff;border-color:#cfe0ff}
+    .meta{font-size:11px;color:var(--muted);margin-top:2px}
+    .choices{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+    .chip{padding:8px 12px;font-size:14px;border-radius:999px;background:#fff;border:1px solid var(--line);cursor:pointer}
+    .chip:hover{border-color:#d0d7e5}
+    .typing{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px}
+    .dot{width:6px;height:6px;border-radius:50%;background:#c7cfdb;animation:blink 1.2s infinite}
+    .dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}
+    @keyframes blink{0%,80%,100%{opacity:.3}40%{opacity:1}}
+
+    .compose{display:flex;gap:10px;padding:12px;background:#fff;border-top:1px solid var(--line)}
+    .in{flex:1;padding:12px 14px;border:1px solid var(--line);border-radius:12px;font-size:15px}
+    .send{background:linear-gradient(180deg,var(--primary),var(--primary2));color:#fff;border:0;border-radius:12px;padding:12px 16px;font-weight:700;cursor:pointer}
+
+    @media (max-width:640px){
+      main{margin:0;max-width:none}
+      .body{height:calc(100vh - 160px);min-height:420px}
+    }
+  </style>
 </head>
 <body>
   <main>
-    <h1 style="text-align:center;margin-top:24px;">Listplicity Conversational Funnel</h1>
-    <p style="text-align:center;">Front-and-center on desktop, full-screen on mobile.</p>
+    <h1>Listplicity Assistant</h1>
+    <p class="sub">Real-time help · MLS & 1% Listing (Limited Services) · Friendly, human answers</p>
+
+    <div class="card" role="dialog" aria-label="Listplicity Chat">
+      <div class="head">
+        <div class="avatar">L</div>
+        <div>
+          <div class="title">Listplicity Assistant</div>
+          <div class="subtle">Ask anything — I’ll also get you set up fast.</div>
+        </div>
+      </div>
+      <div class="bar"><div id="pbar"></div></div>
+      <div class="body" id="log" aria-live="polite"></div>
+      <div class="compose">
+        <input id="in" class="in" placeholder="Type your message… (Enter)" autocomplete="off"/>
+        <button id="send" class="send">Send</button>
+      </div>
+    </div>
   </main>
 
-  <!-- Chat overlay + panel + launcher -->
-  <div id="lp-chat-overlay" class="lp-overlay lp-hidden">
-    <div class="lp-chat-panel" role="dialog" aria-label="Listplicity Chat">
-      <div class="lp-header">
-        <div class="lp-title">Listplicity Assistant</div>
-        <button class="lp-close" id="lpCloseBtn" aria-label="Close chat">&times;</button>
-      </div>
-      <div class="lp-progress"><div class="lp-progress-bar" id="lpProgress"></div></div>
-      <div class="lp-chatlog" id="lpChatlog" aria-live="polite"></div>
-      <form id="lpForm" class="lp-form" autocomplete="off">
-        <input id="lpInput" class="lp-input" type="text" placeholder="Type here..." />
-        <button class="lp-send" type="submit">Send</button>
-      </form>
-    </div>
-  </div>
-  <button id="lpLauncher" class="lp-launcher">Chat with us</button>
+  <script>
+  (function(){
+    const API = window.location.origin; // your Render host
+    const log = document.getElementById('log');
+    const pbar = document.getElementById('pbar');
+    const input = document.getElementById('in');
+    const send = document.getElementById('send');
 
-  <script src="./chat-widget.js"></script>
+    const transcript = [];                 // { role: 'user'|'assistant', content: string }
+    const state = { path:null, answers:{} }; // gets filled as we go
+
+    const add = (role, text, opts={})=>{
+      const row = document.createElement('div');
+      row.className = 'row' + (role==='me' ? ' me' : '');
+      const b = document.createElement('div');
+      b.className = 'bubble'; b.textContent = text;
+      row.appendChild(b);
+
+      if (opts.choices) {
+        const wrap = document.createElement('div');
+        wrap.className = 'choices';
+        opts.choices.forEach(c=>{
+          const chip = document.createElement('button');
+          chip.className='chip'; chip.type='button'; chip.textContent=c.label;
+          chip.onclick=()=> handleUser(c.value || c.label, c.label);
+          wrap.appendChild(chip);
+        });
+        b.appendChild(wrap);
+      }
+
+      log.appendChild(row);
+      log.scrollTop = log.scrollHeight;
+    };
+
+    const typing = (on)=>{
+      const id = 'typing-row';
+      if (on) {
+        if (document.getElementById(id)) return;
+        const row = document.createElement('div');
+        row.className='row';
+        row.id=id;
+        row.innerHTML='<div class="bubble"><span class="typing"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>';
+        log.appendChild(row);
+        log.scrollTop = log.scrollHeight;
+      } else {
+        const r = document.getElementById(id);
+        if (r) r.remove();
+      }
+    };
+
+    const progress = ()=>{
+      const req = ['path','name','email','phone'];
+      const have = req.filter(k => k==='path' ? !!state.path : !!state.answers[k]);
+      pbar.style.width = Math.round(have.length/req.length*100) + '%';
+    };
+
+    async function welcome(){
+      try{
+        const r = await fetch(API + '/api/welcome');
+        const data = await r.json();
+        add('bot', data.bot_text || "Welcome to Listplicity! How can I help?");
+      }catch{
+        add('bot',"Welcome to Listplicity! How can I help?");
+      }
+      progress();
+    }
+
+    async function toLLM(userText){
+      typing(true);
+      try{
+        const resp = await fetch(API + '/api/chat', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ history: transcript.slice(-12), state })
+        });
+        const data = await resp.json();
+
+        if (data.state_patch?.path) state.path = data.state_patch.path;
+        if (data.state_patch?.answers) Object.assign(state.answers, data.state_patch.answers);
+        if (data.state_patch?.tag) state.tag = data.state_patch.tag;
+
+        typing(false);
+        add('bot', data.bot_text || 'Okay.');
+        transcript.push({role:'assistant', content: data.bot_text || ''});
+        progress();
+
+        if (data.action === 'submit') await submitLead();
+      }catch(e){
+        typing(false);
+        add('bot','I hit a snag—mind trying again?');
+        console.error(e);
+      }
+    }
+
+    async function submitLead(){
+      add('bot', 'Sending this over now…');
+      try{
+        const r = await fetch(API + '/api/lead', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ path: state.path, answers: state.answers, tag: state.tag || null, ts: new Date().toISOString() })
+        });
+        if(!r.ok) throw new Error();
+        add('bot', 'Done ✅ We’ll follow up shortly. Want to book a quick call while I have you?');
+        pbar.style.width='100%';
+      }catch{
+        add('bot','Hmm—couldn’t send just now. Want to drop your number/email and I’ll make sure it goes through?');
+      }
+    }
+
+    async function handleUser(value, labelShown){
+      const text = labelShown || value;
+      add('me', text);
+      transcript.push({role:'user', content: value});
+      input.value='';
+      await toLLM(value);
+    }
+
+    send.addEventListener('click', ()=>{ const v=input.value.trim(); if(v) handleUser(v); });
+    input.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); const v=input.value.trim(); if(v) handleUser(v); }});
+
+    // Boot
+    welcome();
+  })();
+  </script>
 </body>
 </html>
