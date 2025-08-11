@@ -1,186 +1,181 @@
-// server.js — Listplicity Chatbot (Chat Completions, Warm Welcome, Static Hosting)
-
-import 'dotenv/config';
-import express from 'express';
-import path from 'path';
-import { fileURLToPath } from 'url';
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const fetch = require('node-fetch');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(cors());
 app.use(express.json());
+app.use(express.static('public'));
 
-// ---------- CORS (you can lock this to your domain later) ----------
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*'); // e.g. 'https://listplicity.com'
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
-});
+// Environment variables
+const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
+const GHL_WEBHOOK_URL = process.env.GHL_WEBHOOK_URL;
+const MLS_APP_URL = process.env.MLS_APP_URL;
 
-// ---------- Healthcheck ----------
-app.get('/api/health', (_req, res) => {
-  res.json({
-    ok: true,
-    service: 'listplicity-chatbot',
-    llm: process.env.LLM_ENABLED === 'true',
-  });
-});
+// System prompt for Claude
+const SYSTEM_PROMPT = `You are the Listplicity AI Assistant - the ULTIMATE real estate lead generation machine! You're funny, engaging, and focused on capturing qualified leads.
 
-// ---------- Lead forwarder to GHL ----------
-app.post('/api/lead', async (req, res) => {
-  const webhook = process.env.GHL_WEBHOOK_URL;
-  if (!webhook) return res.status(500).json({ ok: false, error: 'Missing GHL_WEBHOOK_URL' });
+YOUR MISSION: Turn every visitor into a qualified lead through natural, one-question-at-a-time conversations!
 
-  try {
-    const payload = {
-      source: 'listplicity-chatbot',
-      ...req.body,
-      ts: new Date().toISOString(),
-    };
+PERSONALITY:
+- Funny and personable (use light humor and emojis)
+- ALWAYS ask ONE question at a time - never overwhelm with multiple questions
+- Keep responses short and conversational (2-3 sentences max)
+- Make each interaction feel natural and easy
+- Build rapport before asking for personal info
 
-    const r = await fetch(webhook, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+CONVERSATION STRATEGY - ONE QUESTION AT A TIME:
+1. Determine if they're buying or selling (first question)
+2. If selling → Guide to "Get My Home Value" for CMA
+3. If buying → Collect info then provide MLS app access
+4. Always capture: name, email, phone, location
+5. Create urgency and next steps
 
-    if (!r.ok) throw new Error(`GHL forward failed: ${r.status}`);
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('Lead forward failed:', e);
-    res.status(500).json({ ok: false, error: 'forward_failed' });
-  }
-});
+CRITICAL RULES:
+- NEVER ask multiple questions in one response
+- Keep each response under 50 words when possible
+- Always end with ONE clear question
+- Build excitement for Listplicity's services
+- Make them feel special and valued
 
-// ---------- Warm Welcome (instant message for UI on first load) ----------
-app.get('/api/welcome', (_req, res) => {
-  res.json({
-    intent: 'welcome',
-    bot_text: `Hi there, and welcome to Listplicity! 👋
-Thanks so much for stopping by. Whether you're buying, selling, or just exploring your options, I'm here to help.
-Ask me anything about real estate — from our 1% Listing (Limited Services) to finding your dream home on the MLS.
-So… what brings you here today?`,
-    state_patch: {},
-    action: null,
-  });
-});
+LISTPLICITY SERVICES:
+FOR SELLERS:
+- 1% to 3.5% listing commission packages (vs traditional higher fees)
+- Professional marketing and support
+- Certified agents nationwide
+- Free market analysis (CMA)
 
-// ---------- Smart chat (LLM) — Chat Completions JSON mode ----------
+FOR BUYERS:
+- Exclusive MLS search platform with real-time listings
+- Professional buyer agent network
+- Comprehensive buyer support services
+
+KEY MESSAGING:
+- "Save thousands with our listing packages"
+- "Professional service at every level"
+- "Transparent pricing, no hidden fees"
+- "Same data your agent would show you"
+
+ENGAGEMENT TACTICS:
+- Use their name once you have it
+- Create urgency: "Market's moving fast right now"
+- Build value: "Professional analysis typically costs hundreds"
+- Be conversational: "Quick question for you..."
+- Always guide toward lead capture
+
+Your goal: Get complete lead info through natural, bite-sized conversations. Never overwhelm them with long responses or multiple questions!
+
+Ready to be the smoothest lead generator in real estate? 🚀`;
+
+// Chat endpoint
 app.post('/api/chat', async (req, res) => {
-  if (process.env.LLM_ENABLED !== 'true') {
-    return res.json({
-      intent: 'collect_info',
-      bot_text: 'Smart mode is off. Set LLM_ENABLED=true in Render.',
-      state_patch: {},
-      action: null,
-    });
-  }
+    try {
+        const { message, history = [] } = req.body;
 
-  const { history = [], state = {} } = req.body || {};
+        if (!CLAUDE_API_KEY) {
+            return res.status(500).json({ error: 'Claude API key not configured' });
+        }
 
-  const systemPrompt = `
-You are the Listplicity Real Estate Assistant.
-Tone: confident, warm, professional, conversational.
+        // Prepare messages for Claude
+        const messages = [
+            { role: 'system', content: SYSTEM_PROMPT },
+            ...history,
+            { role: 'user', content: message }
+        ];
 
-Primary goals:
-1) Hold a friendly conversation about buying, selling, or both.
-2) Always work toward gathering fields: path(sell|buy|both), state, address, sell_timeline,
-   buy_area, buy_budget, buy_preapproval(yes|no|unsure), name, email, phone.
-3) When required fields are present, set action="submit" and confirm briefly.
+        // Call Claude API
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': CLAUDE_API_KEY,
+                'anthropic-version': '2023-06-01'
+            },
+            body: JSON.stringify({
+                model: 'claude-3-sonnet-20240229',
+                max_tokens: 300,
+                messages: messages.filter(msg => msg.role !== 'system'),
+                system: SYSTEM_PROMPT
+            })
+        });
 
-1% Listing (Limited Services):
-- If asked, explain it's a Limited Services Listing and not for everyone.
-- Do NOT give full details in chat. Encourage a quick call or phone # to review their situation.
-- Example: "It can save you money, but it depends on your situation. A 10-minute call is best—what’s the best number and a good time?"
+        if (!response.ok) {
+            throw new Error(`Claude API error: ${response.status}`);
+        }
 
-Buyer flow (collect-first, then link):
-- If buying or asking for MLS: acknowledge an MLS-connected app exists (iOS & Android) but do not paste the link immediately.
-- Ask two qualifiers first: preferred areas/school zones and price range.
-- Then collect: name, email, phone ("I’ll text you the app link and set up instant alerts.").
-- After phone, you may include the link (https://tinyurl.com/3cjtjupn) and set tag "MLS Link Request".
-- Continue collecting timeline + preapproval. If they insist on the link first, share it but still ask for at least one contact method.
+        const data = await response.json();
+        const aiResponse = data.content[0].text;
 
-Handling:
-- Answer state-specific RE questions briefly, then pivot to the next missing field.
-- Off-topic: acknowledge briefly and return to real estate.
-- Urgent/safety/legal: suggest human handoff; ask best phone/email.
-- Validate email/phone; if invalid, politely re-ask.
+        res.json({ response: aiResponse });
 
-Return strict JSON only:
-{ "intent": "collect_info|relevant_question|off_topic|handoff",
-  "bot_text": "string",
-  "state_patch": { /* eg { path, answers:{...}, tag } */ },
-  "action": null | "submit" }`.trim();
-
-  const msgs = [
-    { role: 'system', content: systemPrompt },
-    {
-      role: 'user',
-      content: JSON.stringify({
-        history: Array.isArray(history) ? history.slice(-12) : [],
-        state
-      })
+    } catch (error) {
+        console.error('Chat error:', error);
+        res.status(500).json({ error: 'Failed to process chat message' });
     }
-  ];
-
-  try {
-    const r = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        response_format: { type: 'json_object' }, // JSON mode for structured output
-        messages: msgs,
-        temperature: 0.3
-      })
-    });
-
-    if (!r.ok) {
-      const txt = await r.text().catch(()=> '');
-      console.error('OpenAI error:', r.status, txt);
-      return res.status(500).json({
-        intent: 'collect_info',
-        bot_text: 'I had trouble reaching my brain—mind trying again?',
-        state_patch: {},
-        action: null
-      });
-    }
-
-    const data = await r.json();
-    const text = data?.choices?.[0]?.message?.content || '{}';
-
-    let out;
-    try { out = JSON.parse(text); }
-    catch {
-      out = { intent: 'collect_info', bot_text: 'Sorry, hiccup. Could you rephrase that?', state_patch: {}, action: null };
-    }
-    if (!out || typeof out !== 'object') {
-      out = { intent: 'collect_info', bot_text: 'Sorry, hiccup. Could you rephrase that?', state_patch: {}, action: null };
-    }
-    return res.json(out);
-  } catch (e) {
-    console.error('LLM exception:', e);
-    return res.status(500).json({
-      intent: 'collect_info',
-      bot_text: 'I hit a snag. Mind trying again?',
-      state_patch: {},
-      action: null
-    });
-  }
 });
 
-// ---------- Static hosting (so / shows your chat page) ----------
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
+// Lead capture endpoint
+app.post('/api/lead', async (req, res) => {
+    try {
+        const { name, email, phone, address, intent, area } = req.body;
 
-app.use(express.static(__dirname)); // serves index.html, css, js placed at repo root
-app.get('/', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
+        if (!GHL_WEBHOOK_URL) {
+            return res.status(500).json({ error: 'GHL webhook not configured' });
+        }
+
+        // Prepare lead data for GHL
+        const leadData = {
+            name: name || '',
+            email: email || '',
+            phone: phone || '',
+            address: address || '',
+            intent: intent || '',
+            area: area || '',
+            source: 'Listplicity Chatbot',
+            tags: ['chatbot-lead', intent || 'unknown'].filter(Boolean),
+            timestamp: new Date().toISOString()
+        };
+
+        // Send to GHL webhook
+        const ghlResponse = await fetch(GHL_WEBHOOK_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(leadData)
+        });
+
+        if (!ghlResponse.ok) {
+            throw new Error(`GHL webhook error: ${ghlResponse.status}`);
+        }
+
+        res.json({ success: true, message: 'Lead captured successfully' });
+
+    } catch (error) {
+        console.error('Lead capture error:', error);
+        res.status(500).json({ error: 'Failed to capture lead' });
+    }
 });
 
-// ---------- Start ----------
-const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Listplicity server running on :${port}`));
+// MLS app URL endpoint
+app.get('/api/mls-url', (req, res) => {
+    res.json({ url: MLS_APP_URL || 'https://bk.homestack.com/ascendancyrealty?aik=awilson1' });
+});
+
+// Health check
+app.get('/health', (req, res) => {
+    res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+// Serve frontend
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.listen(PORT, () => {
+    console.log(`Listplicity Chatbot server running on port ${PORT}`);
+});
